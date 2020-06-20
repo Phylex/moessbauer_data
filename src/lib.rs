@@ -45,10 +45,22 @@ mod tests {
                                     speed: 947,
                                     cycle: 40278 };
         let buffer = peak.serialize();
-        assert_eq!(Ok(peak), MeasuredPeak::deserialize(&buffer[..]));
+        assert_eq!(Ok(peak), MeasuredPeak::deserialize(&buffer));
+    }
+
+    #[test]
+    fn filter_serialize_deserialize() {
+        let config = FilterConfig { pthresh: 1_000_000,
+                                    tdead: 100,
+                                    k: 20,
+                                    l: 50,
+                                    m: 2_000_000 };
+        let buffer = config.serialize();
+        assert_eq!(Ok(config), FilterConfig::deserialize(&buffer));
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct FilterConfig {
     pub pthresh: u64,
     pub tdead: u64,
@@ -115,10 +127,11 @@ impl Deserialize for MeasuredPeak {
                          size_of::<u32>() +
                          size_of::<u16>() +
                          size_of::<u32>();
-        let mut peak = MeasuredPeak { timestamp: 0,
-                                      peak_height: 0,
-                                      speed: 0,
-                                      cycle: 0 };
+        let mut peak = MeasuredPeak {
+            timestamp: 0,
+            peak_height: 0,
+            speed: 0,
+            cycle: 0 };
         if buffer.len() != needed_len {
             println!("{}", buffer.len());
             println!("{}", needed_len);
@@ -160,6 +173,33 @@ impl Serialize for FilterConfig {
         ser_data
     }
 }
+
+impl Deserialize for FilterConfig {
+    type Item = FilterConfig;
+    fn deserialize(buffer: &[u8]) -> Result<Self::Item, ()> {
+        let needed_len = size_of::<u64>() * 5;
+        let mut config = FilterConfig {
+            pthresh: 0,
+            tdead: 0,
+            k: 0,
+            l: 0,
+            m: 0 };
+        if buffer.len() != needed_len {
+            Err(())
+        } else {
+            let mut reader = Cursor::new(buffer);
+            config.pthresh = reader.read_u64::<BigEndian>().unwrap();
+            config.tdead = reader.read_u64::<BigEndian>().unwrap();
+            config.k = reader.read_u64::<BigEndian>().unwrap();
+            config.l = reader.read_u64::<BigEndian>().unwrap();
+            config.m = reader.read_u64::<BigEndian>().unwrap();
+            Ok(config)
+        }
+    }
+}
+
+
+
 
 impl Serialize for Status {
     fn serialize(&self) -> Vec<u8> {

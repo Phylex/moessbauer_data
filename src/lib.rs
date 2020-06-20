@@ -45,7 +45,7 @@ mod tests {
                                     speed: 947,
                                     cycle: 40278 };
         let buffer = peak.serialize();
-        assert_eq!(Ok(peak), MeasuredPeak::deserialize(&buffer));
+        assert_eq!(Ok((peak, 18)), MeasuredPeak::deserialize(&buffer));
     }
 
     #[test]
@@ -56,7 +56,17 @@ mod tests {
                                     l: 50,
                                     m: 2_000_000 };
         let buffer = config.serialize();
-        assert_eq!(Ok(config), FilterConfig::deserialize(&buffer));
+        assert_eq!(Ok((config, 40)), FilterConfig::deserialize(&buffer));
+    }
+
+    #[test]
+    fn serialize_status() {
+        let stat = Status::Start;
+        let ser_data = stat.serialize();
+        assert_eq!(ser_data[0], 0);
+        let stat = Status::Stop;
+        let ser_data = stat.serialize();
+        assert_eq!(ser_data[0], 1);
     }
 }
 
@@ -94,7 +104,35 @@ pub trait Serialize {
 
 pub trait Deserialize {
     type Item;
-    fn deserialize(buffer: &[u8]) -> Result<Self::Item, ()>;
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()>;
+}
+
+impl MeasuredPeak {
+    pub fn new(raw_data: &[u8]) -> MeasuredPeak {
+        if raw_data.len() != 12 {
+            panic!("Wrong buffer length passed in")
+        }
+        let mut timestamp: u64 = 0;
+        for (i, &byte) in raw_data[..5].iter().enumerate() {
+            timestamp |= (byte as u64) << i*8;
+        }
+        // the cycle count has two normal bytes and one shared one
+        let mut cycle: u32 = 0;
+        cycle |= (raw_data[5] as u32) << 8;
+        cycle |= (raw_data[6] as u32) << 16;
+        cycle |= (raw_data[7] as u32) & 0x03 << 24;
+        // decode the speed counter
+        let mut speed: u16 = 0;
+        speed |= (raw_data[7] as u16) & 0xFC >> 2;
+        speed |= (raw_data[8] as u16) & 0x0F << 6;
+        // last but not least the peak height
+        let mut peak_height: u32 = 0;
+        peak_height |= (raw_data[8] as u32) & 0xF0 >> 4;
+        for (i, &byte) in raw_data[9..12].iter().enumerate() {
+            peak_height |= (byte as u32) << (i*8+4)
+        }
+        MeasuredPeak { timestamp, peak_height, speed, cycle }
+    }
 }
 
 impl Serialize for MeasuredPeak {
@@ -122,7 +160,7 @@ impl Serialize for MeasuredPeak {
 
 impl Deserialize for MeasuredPeak {
     type Item = MeasuredPeak;
-    fn deserialize(buffer: &[u8]) -> Result<Self::Item, ()> {
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
         let needed_len = size_of::<u64>() +
                          size_of::<u32>() +
                          size_of::<u16>() +
@@ -142,7 +180,7 @@ impl Deserialize for MeasuredPeak {
             peak.peak_height = reader.read_u32::<BigEndian>().unwrap();
             peak.speed = reader.read_u16::<BigEndian>().unwrap();
             peak.cycle = reader.read_u32::<BigEndian>().unwrap();
-            Ok(peak)
+            Ok((peak, needed_len))
         }
     }
 }
@@ -176,7 +214,7 @@ impl Serialize for FilterConfig {
 
 impl Deserialize for FilterConfig {
     type Item = FilterConfig;
-    fn deserialize(buffer: &[u8]) -> Result<Self::Item, ()> {
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
         let needed_len = size_of::<u64>() * 5;
         let mut config = FilterConfig {
             pthresh: 0,
@@ -193,13 +231,10 @@ impl Deserialize for FilterConfig {
             config.k = reader.read_u64::<BigEndian>().unwrap();
             config.l = reader.read_u64::<BigEndian>().unwrap();
             config.m = reader.read_u64::<BigEndian>().unwrap();
-            Ok(config)
+            Ok((config, needed_len))
         }
     }
 }
-
-
-
 
 impl Serialize for Status {
     fn serialize(&self) -> Vec<u8> {
@@ -212,6 +247,16 @@ impl Serialize for Status {
     }
 }
 
+impl Deserialize for Status {
+    type Item = Status;
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
+        match &buffer[0] {
+            0 => Ok((Status::Start, 1)),
+            1 => Ok((Status::Stop, 1)),
+            _ => Err(()),
+        }
+    }
+}
 
 impl Serialize for Message {
     fn serialize(&self) -> Vec<u8> {
@@ -248,30 +293,38 @@ impl Serialize for Message {
     }
 }
 
-impl MeasuredPeak {
-    pub fn new(raw_data: &[u8]) -> MeasuredPeak {
-        if raw_data.len() != 12 {
-            panic!("Wrong buffer length passed in")
+impl Deserialize for Message {
+    type Item = Message;
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
+        match &buffer[0] {
+            0 => {
+                let mut reader = Cursor::new(&buffer[1..9]);
+                let peak_len = size_of::<MeasuredPeak>() - 6;
+                let peak_cnt = reader.read_u64::<BigEndian>().unwrap() as usize;
+                let message_len =  peak_cnt * peak_len;
+                let peak_buf = &buffer[10..];
+                let mut size = 10;
+                if buffer[10..].len() < message_len {
+                    Err(())
+                } else {
+                    let mut peak_vec: Vec<MeasuredPeak> = Vec::with_capacity(peak_cnt);
+                    for i in 0..peak_cnt {
+                        let cur_buf = &peak_buf[i*peak_len .. (i+1) * peak_len];
+                        let (cur_peak, peak_size) = MeasuredPeak::deserialize(cur_buf).unwrap();
+                        peak_vec.push(cur_peak);
+                        size += peak_size;
+                    }
+                    Ok((Message::Data(peak_vec), size as usize))
+                }
+            },
+            1 => {
+                let (status, size) = Status::deserialize(&buffer[1..2]).unwrap();
+                Ok((Message::Status(status), 1 as usize + size))
+            },
+            2 => {
+                Err(())
+            },
+            _ => { Err(()) }
         }
-        let mut timestamp: u64 = 0;
-        for (i, &byte) in raw_data[..5].iter().enumerate() {
-            timestamp |= (byte as u64) << i*8;
-        }
-        // the cycle count has two normal bytes and one shared one
-        let mut cycle: u32 = 0;
-        cycle |= (raw_data[5] as u32) << 8;
-        cycle |= (raw_data[6] as u32) << 16;
-        cycle |= (raw_data[7] as u32) & 0x03 << 24;
-        // decode the speed counter
-        let mut speed: u16 = 0;
-        speed |= (raw_data[7] as u16) & 0xFC >> 2;
-        speed |= (raw_data[8] as u16) & 0x0F << 6;
-        // last but not least the peak height
-        let mut peak_height: u32 = 0;
-        peak_height |= (raw_data[8] as u32) & 0xF0 >> 4;
-        for (i, &byte) in raw_data[9..12].iter().enumerate() {
-            peak_height |= (byte as u32) << (i*8+4)
-        }
-        MeasuredPeak { timestamp, peak_height, speed, cycle }
     }
 }

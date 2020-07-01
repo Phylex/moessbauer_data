@@ -1,5 +1,6 @@
 use std::mem::{transmute, size_of};
 use std::io::Cursor;
+use std::fmt;
 extern crate byteorder;
 use byteorder::{BigEndian, ReadBytesExt};
 
@@ -109,34 +110,19 @@ mod tests {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub struct FilterConfig {
-    pub pthresh: u64,
-    pub tdead: u64,
-    pub k: u64,
-    pub l: u64,
-    pub m: u64,
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeserializeError {
+    BufferToShort(usize),
+    WrongValue,
 }
 
-#[derive(Debug, PartialEq)]
-pub struct MeasuredPeak {
-    pub timestamp: u64,
-    pub peak_height: u32,
-    pub speed: u16,
-    pub cycle: u32,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Status {
-    Start,
-    Stop,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Message {
-    Data(Vec<MeasuredPeak>),
-    Status(Status),
-    Config(FilterConfig),
+impl fmt::Display for DeserializeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            DeserializeError::BufferToShort(missing_bytes) => write!(f, "The buffer is missing {} bytes so that it can be interpreted", missing_bytes),
+            DeserializeError::WrongValue => write!(f, "The of message type indicator is invalid"),
+        }
+    }
 }
 
 pub trait Serialize {
@@ -145,7 +131,15 @@ pub trait Serialize {
 
 pub trait Deserialize {
     type Item;
-    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()>;
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), DeserializeError>;
+}
+
+#[derive(Debug, PartialEq)]
+pub struct MeasuredPeak {
+    pub timestamp: u64,
+    pub peak_height: u32,
+    pub speed: u16,
+    pub cycle: u32,
 }
 
 impl MeasuredPeak {
@@ -201,7 +195,7 @@ impl Serialize for MeasuredPeak {
 
 impl Deserialize for MeasuredPeak {
     type Item = MeasuredPeak;
-    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), DeserializeError> {
         let needed_len = size_of::<u64>() +
                          size_of::<u32>() +
                          size_of::<u16>() +
@@ -211,10 +205,8 @@ impl Deserialize for MeasuredPeak {
             peak_height: 0,
             speed: 0,
             cycle: 0 };
-        if buffer.len() != needed_len {
-            println!("{}", buffer.len());
-            println!("{}", needed_len);
-            Err(())
+        if buffer.len() < needed_len {
+            Err(DeserializeError::BufferToShort(needed_len-buffer.len()))
         } else {
             let mut reader = Cursor::new(buffer);
             peak.timestamp = reader.read_u64::<BigEndian>().unwrap();
@@ -224,6 +216,15 @@ impl Deserialize for MeasuredPeak {
             Ok((peak, needed_len))
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct FilterConfig {
+    pub pthresh: u64,
+    pub tdead: u64,
+    pub k: u64,
+    pub l: u64,
+    pub m: u64,
 }
 
 impl Serialize for FilterConfig {
@@ -255,7 +256,7 @@ impl Serialize for FilterConfig {
 
 impl Deserialize for FilterConfig {
     type Item = FilterConfig;
-    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), DeserializeError> {
         let needed_len = size_of::<u64>() * 5;
         let mut config = FilterConfig {
             pthresh: 0,
@@ -263,8 +264,8 @@ impl Deserialize for FilterConfig {
             k: 0,
             l: 0,
             m: 0 };
-        if buffer.len() != needed_len {
-            Err(())
+        if buffer.len() < needed_len {
+            Err(DeserializeError::BufferToShort(needed_len-buffer.len()))
         } else {
             let mut reader = Cursor::new(buffer);
             config.pthresh = reader.read_u64::<BigEndian>().unwrap();
@@ -275,6 +276,12 @@ impl Deserialize for FilterConfig {
             Ok((config, needed_len))
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Status {
+    Start,
+    Stop,
 }
 
 impl Serialize for Status {
@@ -290,13 +297,23 @@ impl Serialize for Status {
 
 impl Deserialize for Status {
     type Item = Status;
-    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), DeserializeError> {
+        if buffer.len() < 1 {
+            return Err(DeserializeError::BufferToShort(1))
+        }
         match &buffer[0] {
             0 => Ok((Status::Start, 1)),
             1 => Ok((Status::Stop, 1)),
-            _ => Err(()),
+            _ => Err(DeserializeError::WrongValue),
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Message {
+    Data(Vec<MeasuredPeak>),
+    Status(Status),
+    Config(FilterConfig),
 }
 
 impl Serialize for Message {
@@ -336,9 +353,15 @@ impl Serialize for Message {
 
 impl Deserialize for Message {
     type Item = Message;
-    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), ()> {
+    fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), DeserializeError> {
+        if buffer.len() < 1 {
+            return Err(DeserializeError::BufferToShort(1))
+        }
         match &buffer[0] {
             0 => {
+                if buffer.len() < 9 {
+                    return Err(DeserializeError::BufferToShort(9-buffer.len()))
+                }
                 let mut reader = Cursor::new(&buffer[1..9]);
                 let peak_len = size_of::<MeasuredPeak>() - 6;
                 let peak_cnt = reader.read_u64::<BigEndian>().unwrap() as usize;
@@ -346,7 +369,7 @@ impl Deserialize for Message {
                 let peak_buf = &buffer[9..];
                 let mut size = 10;
                 if peak_buf.len() < message_len {
-                    Err(())
+                    Err(DeserializeError::BufferToShort(message_len - peak_buf.len()))
                 } else {
                     let mut peak_vec: Vec<MeasuredPeak> = Vec::with_capacity(peak_cnt);
                     for i in 0..peak_cnt {
@@ -360,7 +383,7 @@ impl Deserialize for Message {
             },
             1 => {
                 if buffer.len() < 2 {
-                    Err(())
+                    Err(DeserializeError::BufferToShort(2-buffer.len()))
                 } else {
                     let (status, size) = Status::deserialize(&buffer[1..2]).unwrap();
                     Ok((Message::Status(status), 1 as usize + size))
@@ -368,13 +391,13 @@ impl Deserialize for Message {
             },
             2 => {
                 if buffer.len() < 41 {
-                    Err(())
+                    Err(DeserializeError::BufferToShort(41-buffer.len()))
                 } else {
                     let (config, size) = FilterConfig::deserialize(&buffer[1..41]).unwrap();
                     Ok((Message::Config(config), 1 as usize + size))
                 }
             },
-            _ => { Err(()) },
+            _ => { Err(DeserializeError::WrongValue) },
         }
     }
 }

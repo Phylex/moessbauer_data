@@ -68,6 +68,45 @@ mod tests {
         let ser_data = stat.serialize();
         assert_eq!(ser_data[0], 1);
     }
+
+    #[test]
+    fn message_data_serialize_deserialize() {
+        let peak = MeasuredPeak { timestamp: 59182041740,
+                                    peak_height: 53950023,
+                                    speed: 947,
+                                    cycle: 40278 };
+        let peak2 = MeasuredPeak { timestamp: 59182041740,
+                                    peak_height: 53950023,
+                                    speed: 947,
+                                    cycle: 40278 };
+        let message = Message::Data(vec![peak2, peak]);
+        let sermsg = message.serialize();
+        let (desermsg, _size) = Message::deserialize(&sermsg).unwrap();
+        assert_eq!(message, desermsg);
+    }
+
+    #[test]
+    fn message_config_serialize_deserialize() {
+        let config = FilterConfig { pthresh: 1_000_000,
+                                    tdead: 100,
+                                    k: 20,
+                                    l: 50,
+                                    m: 2_000_000 };
+        let message = Message::Config(config);
+        let sermsg = message.serialize();
+        let (desermsg, _size) = Message::deserialize(&sermsg).unwrap();
+        println!("{:?}, {}", sermsg, sermsg.len());
+        assert_eq!(message, desermsg);
+    }
+
+    #[test]
+    fn message_status_serialize_deserialize() {
+        let status = Status::Start;
+        let msg = Message::Status(status);
+        let sermsg = msg.serialize();
+        let (desermsg, _size) = Message::deserialize(&sermsg).unwrap();
+        assert_eq!(msg, desermsg);
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -87,11 +126,13 @@ pub struct MeasuredPeak {
     pub cycle: u32,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Status {
     Start,
     Stop,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Message {
     Data(Vec<MeasuredPeak>),
     Status(Status),
@@ -302,9 +343,9 @@ impl Deserialize for Message {
                 let peak_len = size_of::<MeasuredPeak>() - 6;
                 let peak_cnt = reader.read_u64::<BigEndian>().unwrap() as usize;
                 let message_len =  peak_cnt * peak_len;
-                let peak_buf = &buffer[10..];
+                let peak_buf = &buffer[9..];
                 let mut size = 10;
-                if buffer[10..].len() < message_len {
+                if peak_buf.len() < message_len {
                     Err(())
                 } else {
                     let mut peak_vec: Vec<MeasuredPeak> = Vec::with_capacity(peak_cnt);
@@ -318,13 +359,22 @@ impl Deserialize for Message {
                 }
             },
             1 => {
-                let (status, size) = Status::deserialize(&buffer[1..2]).unwrap();
-                Ok((Message::Status(status), 1 as usize + size))
+                if buffer.len() < 2 {
+                    Err(())
+                } else {
+                    let (status, size) = Status::deserialize(&buffer[1..2]).unwrap();
+                    Ok((Message::Status(status), 1 as usize + size))
+                }
             },
             2 => {
-                Err(())
+                if buffer.len() < 41 {
+                    Err(())
+                } else {
+                    let (config, size) = FilterConfig::deserialize(&buffer[1..41]).unwrap();
+                    Ok((Message::Config(config), 1 as usize + size))
+                }
             },
-            _ => { Err(()) }
+            _ => { Err(()) },
         }
     }
 }

@@ -108,6 +108,25 @@ mod tests {
         let (desermsg, _size) = Message::deserialize(&sermsg).unwrap();
         assert_eq!(msg, desermsg);
     }
+
+    #[test]
+    fn message_data_not_enough_bytes() {
+        let peak = MeasuredPeak { timestamp: 59182041740,
+                                    peak_height: 53950023,
+                                    speed: 947,
+                                    cycle: 40278 };
+        let peak2 = MeasuredPeak { timestamp: 59182041740,
+                                    peak_height: 53950023,
+                                    speed: 947,
+                                    cycle: 40278 };
+        let message = Message::Data(vec![peak2, peak]);
+        let sermsg = message.serialize();
+        let deser_result = Message::deserialize(&sermsg[..10]);
+        println!("{:?}", deser_result);
+        println!("{:?}, {}", sermsg, sermsg.len());
+        assert_eq!(45, sermsg.len());
+        assert_eq!(Err(DeserializeError::BufferToShort(35)), deser_result);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

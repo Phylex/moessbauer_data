@@ -189,6 +189,13 @@ impl MeasuredPeak {
     }
 }
 
+impl fmt::Display for MeasuredPeak {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{},{},{},{}",
+        self.peak_height, self.speed, self.cycle, self.timestamp)
+    }
+}
+
 impl Serialize for MeasuredPeak {
     fn serialize(&self) -> Vec<u8> {
         let mut ser_data: Vec<u8> = Vec::with_capacity(18);

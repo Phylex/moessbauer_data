@@ -3,6 +3,7 @@ use std::io::Cursor;
 use std::fmt;
 extern crate byteorder;
 use byteorder::{BigEndian, ReadBytesExt};
+use hex;
 
 #[cfg(test)]
 mod tests {
@@ -153,7 +154,7 @@ pub trait Deserialize {
     fn deserialize(buffer: &[u8]) -> Result<(Self::Item, usize), DeserializeError>;
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct MeasuredPeak {
     pub timestamp: u64,
     pub peak_height: u32,
@@ -172,20 +173,30 @@ impl MeasuredPeak {
         }
         // the cycle count has two normal bytes and one shared one
         let mut cycle: u32 = 0;
-        cycle |= (raw_data[5] as u32) << 8;
-        cycle |= (raw_data[6] as u32) << 16;
-        cycle |= (raw_data[7] as u32) & 0x03 << 24;
+        cycle |= raw_data[5] as u32;
+        cycle |= (raw_data[6] as u32) << 8;
+        cycle |= (raw_data[7] as u32) & 0x03 << 16;
         // decode the speed counter
         let mut speed: u16 = 0;
-        speed |= (raw_data[7] as u16) & 0xFC >> 2;
-        speed |= (raw_data[8] as u16) & 0x0F << 6;
+        speed |= ((raw_data[7] & 0xFC) >> 2) as u16;
+        speed |= ((raw_data[8] & 0x0F) << 6) as u16;
+
         // last but not least the peak height
         let mut peak_height: u32 = 0;
-        peak_height |= (raw_data[8] as u32) & 0xF0 >> 4;
+        peak_height |= ((raw_data[8] & 0xF0) >> 4) as u32;
         for (i, &byte) in raw_data[9..12].iter().enumerate() {
             peak_height |= (byte as u32) << (i*8+4)
         }
         MeasuredPeak { timestamp, peak_height, speed, cycle }
+    }
+
+    pub fn to_hex_string(&self) -> String {
+        let hex_ts = hex::encode(self.timestamp.to_le_bytes());
+        let hex_ph = hex::encode(self.peak_height.to_le_bytes());
+        let hex_cy = hex::encode(self.cycle.to_le_bytes());
+        let hex_sp = hex::encode(self.speed.to_le_bytes());
+        let string = format!("{} {} {} {}", hex_ts, hex_ph, hex_cy, hex_sp);
+        string
     }
 }
 

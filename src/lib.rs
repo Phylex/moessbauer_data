@@ -179,7 +179,7 @@ impl MeasuredPeak {
         // decode the speed counter
         let mut speed: u16 = 0;
         speed |= ((raw_data[7] & 0xFC) >> 2) as u16;
-        speed |= ((raw_data[8] & 0x0F) << 6) as u16;
+        speed |= (raw_data[8] as u16 & 0x000F) << 6;
 
         // last but not least the peak height
         let mut peak_height: u32 = 0;
@@ -195,8 +195,7 @@ impl MeasuredPeak {
         let hex_ph = hex::encode(self.peak_height.to_le_bytes());
         let hex_cy = hex::encode(self.cycle.to_le_bytes());
         let hex_sp = hex::encode(self.speed.to_le_bytes());
-        let string = format!("{} {} {} {}", hex_ts, hex_ph, hex_cy, hex_sp);
-        string
+        format!("{} {} {} {}", hex_ts, hex_ph, hex_cy, hex_sp)
     }
 }
 
